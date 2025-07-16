@@ -1,27 +1,37 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { 
   BarChart3, 
   Link2, 
   Users, 
-  Settings, 
   Home,
   TrendingUp,
   MousePointer,
   Calendar,
-  LogOut
+  LogOut,
+  Activity
 } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Separator } from '../components/ui/separator'
 import { blink } from '../blink/client'
+import { db, UrlRecord } from '../lib/database'
 import AnalyticsPage from './admin/AnalyticsPage'
 import LinkManagementPage from './admin/LinkManagementPage'
 import UserManagementPage from './admin/UserManagementPage'
 
 interface AdminDashboardProps {
   user: any
+}
+
+interface DashboardStats {
+  totalUrls: number
+  totalClicks: number
+  activeUrls: number
+  recentClicks: number
+  topUrls: UrlRecord[]
+  dailyClicks: Array<{ date: string; clicks: number }>
 }
 
 export default function AdminDashboard({ user }: AdminDashboardProps) {
@@ -52,13 +62,6 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
     { name: 'Analytics', href: '/admin/analytics', icon: TrendingUp, current: location.pathname === '/admin/analytics' },
     { name: 'Links', href: '/admin/links', icon: Link2, current: location.pathname === '/admin/links' },
     { name: 'Users', href: '/admin/users', icon: Users, current: location.pathname === '/admin/users' },
-  ]
-
-  const stats = [
-    { name: 'Total Links', value: '1,234', change: '+12%', icon: Link2 },
-    { name: 'Total Clicks', value: '45,678', change: '+8%', icon: MousePointer },
-    { name: 'Active Users', value: '89', change: '+23%', icon: Users },
-    { name: 'This Month', value: '2,345', change: '+15%', icon: Calendar },
   ]
 
   return (
@@ -139,7 +142,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
         <main className="py-8">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <Routes>
-              <Route path="/" element={<DashboardOverview stats={stats} />} />
+              <Route path="/" element={<DashboardOverview user={user} />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/links" element={<LinkManagementPage />} />
               <Route path="/users" element={<UserManagementPage />} />
@@ -151,7 +154,76 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   )
 }
 
-function DashboardOverview({ stats }: { stats: any[] }) {
+function DashboardOverview({ user }: { user: any }) {
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadDashboardStats()
+  }, [])
+
+  const loadDashboardStats = async () => {
+    try {
+      setLoading(true)
+      const analytics = await db.getAnalytics()
+      setStats(analytics)
+    } catch (error) {
+      console.error('Failed to load dashboard stats:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (!stats) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-gray-500">Failed to load dashboard data</p>
+        <Button onClick={loadDashboardStats} className="mt-4">
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  const statCards = [
+    { 
+      name: 'Total Links', 
+      value: stats.totalUrls.toLocaleString(), 
+      change: '+12%', 
+      icon: Link2,
+      description: 'All shortened URLs'
+    },
+    { 
+      name: 'Total Clicks', 
+      value: stats.totalClicks.toLocaleString(), 
+      change: '+8%', 
+      icon: MousePointer,
+      description: 'All time clicks'
+    },
+    { 
+      name: 'Active Links', 
+      value: stats.activeUrls.toLocaleString(), 
+      change: '+23%', 
+      icon: Activity,
+      description: 'Currently active URLs'
+    },
+    { 
+      name: 'Recent Clicks', 
+      value: stats.recentClicks.toLocaleString(), 
+      change: '+15%', 
+      icon: Calendar,
+      description: 'Last 30 days'
+    },
+  ]
+
   return (
     <div>
       <div className="mb-8">
@@ -161,13 +233,14 @@ function DashboardOverview({ stats }: { stats: any[] }) {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        {stats.map((stat) => (
+        {statCards.map((stat) => (
           <Card key={stat.name}>
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600">{stat.name}</p>
                   <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
+                  <p className="text-xs text-gray-500 mt-1">{stat.description}</p>
                 </div>
                 <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center">
                   <stat.icon className="w-6 h-6 text-blue-600" />
@@ -192,52 +265,115 @@ function DashboardOverview({ stats }: { stats: any[] }) {
             <CardDescription>Latest shortened URLs</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      pti.ly/abc{i}23
-                    </p>
-                    <p className="text-sm text-gray-500 truncate">
-                      https://example.com/very-long-url-{i}
-                    </p>
+            {stats.topUrls.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Link2 className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                <p>No links created yet</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {stats.topUrls.slice(0, 5).map((url) => (
+                  <div key={url.id} className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        /{url.shortCode}
+                      </p>
+                      <p className="text-sm text-gray-500 truncate">
+                        {url.originalUrl}
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        {new Date(url.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {!url.isActive && (
+                        <Badge variant="secondary" className="text-red-600 bg-red-50">
+                          Inactive
+                        </Badge>
+                      )}
+                      <Badge variant="outline">
+                        {url.clicks} clicks
+                      </Badge>
+                    </div>
                   </div>
-                  <Badge variant="outline">
-                    {Math.floor(Math.random() * 100)} clicks
-                  </Badge>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <CardTitle>Top Performing Links</CardTitle>
-            <CardDescription>Most clicked links this week</CardDescription>
+            <CardDescription>Most clicked links</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      pti.ly/top{i}
-                    </p>
-                    <p className="text-sm text-gray-500 truncate">
-                      https://popular-site-{i}.com
-                    </p>
+            {stats.topUrls.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <MousePointer className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                <p>No click data yet</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {stats.topUrls
+                  .filter(url => url.clicks > 0)
+                  .sort((a, b) => b.clicks - a.clicks)
+                  .slice(0, 5)
+                  .map((url) => (
+                    <div key={url.id} className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          /{url.shortCode}
+                        </p>
+                        <p className="text-sm text-gray-500 truncate">
+                          {url.originalUrl}
+                        </p>
+                      </div>
+                      <Badge>
+                        {url.clicks} clicks
+                      </Badge>
+                    </div>
+                  ))}
+                {stats.topUrls.filter(url => url.clicks > 0).length === 0 && (
+                  <div className="text-center py-4 text-gray-500">
+                    <p>No clicks recorded yet</p>
                   </div>
-                  <Badge>
-                    {1000 - i * 150} clicks
-                  </Badge>
-                </div>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Quick Actions */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Quick Actions</CardTitle>
+          <CardDescription>Common administrative tasks</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-3">
+            <Button asChild>
+              <Link to="/admin/links">
+                <Link2 className="w-4 h-4 mr-2" />
+                Manage Links
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
+              <Link to="/admin/analytics">
+                <BarChart3 className="w-4 h-4 mr-2" />
+                View Analytics
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
+              <Link to="/">
+                <Home className="w-4 h-4 mr-2" />
+                Create New Link
+              </Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

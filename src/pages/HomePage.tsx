@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { Link2, Copy, QrCode, BarChart3, Settings, LogOut } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link2, Copy, QrCode, BarChart3, LogOut, ExternalLink, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { useToast } from '../hooks/use-toast'
 import { blink } from '../blink/client'
+import { db, UrlRecord } from '../lib/database'
 
 interface HomePageProps {
   user: any
@@ -16,8 +17,37 @@ export default function HomePage({ user }: HomePageProps) {
   const [customAlias, setCustomAlias] = useState('')
   const [shortenedUrl, setShortenedUrl] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [recentUrls, setRecentUrls] = useState([])
+  const [recentUrls, setRecentUrls] = useState<UrlRecord[]>([])
+  const [loadingUrls, setLoadingUrls] = useState(true)
   const { toast } = useToast()
+
+  // Load user's URLs on component mount
+  useEffect(() => {
+    if (user?.id) {
+      loadUserUrls()
+    }
+  }, [user?.id])
+
+  const loadUserUrls = async () => {
+    try {
+      setLoadingUrls(true)
+      const urls = await db.getUrlsByUserId(user.id)
+      setRecentUrls(urls.slice(0, 10)) // Show last 10 URLs
+    } catch (error) {
+      console.error('Failed to load URLs:', error)
+    } finally {
+      setLoadingUrls(false)
+    }
+  }
+
+  const validateUrl = (urlString: string): boolean => {
+    try {
+      const url = new URL(urlString)
+      return url.protocol === 'http:' || url.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }
 
   const handleShorten = async () => {
     if (!url.trim()) {
@@ -29,13 +59,10 @@ export default function HomePage({ user }: HomePageProps) {
       return
     }
 
-    // Basic URL validation
-    try {
-      new URL(url)
-    } catch {
+    if (!validateUrl(url)) {
       toast({
         title: "Error", 
-        description: "Please enter a valid URL",
+        description: "Please enter a valid URL (must start with http:// or https://)",
         variant: "destructive"
       })
       return
@@ -44,23 +71,51 @@ export default function HomePage({ user }: HomePageProps) {
     setIsLoading(true)
     
     try {
-      // For now, simulate the URL shortening since DB is not available
-      const shortCode = customAlias || Math.random().toString(36).substring(2, 8)
-      const shortened = `${window.location.origin}/${shortCode}`
+      let shortCode = customAlias.trim()
       
-      setShortenedUrl(shortened)
-      
-      // Add to recent URLs (simulated)
-      const newUrl = {
-        id: Date.now().toString(),
-        original_url: url,
-        short_code: shortCode,
-        shortened_url: shortened,
-        clicks: 0,
-        created_at: new Date().toISOString()
+      // If custom alias provided, check if it's available
+      if (shortCode) {
+        if (shortCode.length < 3) {
+          toast({
+            title: "Error",
+            description: "Custom alias must be at least 3 characters long",
+            variant: "destructive"
+          })
+          setIsLoading(false)
+          return
+        }
+        
+        const isAvailable = await db.isShortCodeAvailable(shortCode)
+        if (!isAvailable) {
+          toast({
+            title: "Error",
+            description: "This custom alias is already taken",
+            variant: "destructive"
+          })
+          setIsLoading(false)
+          return
+        }
+      } else {
+        // Generate unique short code
+        do {
+          shortCode = db.generateShortCode()
+        } while (!(await db.isShortCodeAvailable(shortCode)))
       }
       
-      setRecentUrls(prev => [newUrl, ...prev.slice(0, 4)])
+      // Create the URL record
+      const newUrl = await db.createUrl({
+        userId: user.id,
+        originalUrl: url,
+        shortCode,
+        customAlias: customAlias.trim() || undefined,
+        isActive: true
+      })
+      
+      const shortened = `${window.location.origin}/${shortCode}`
+      setShortenedUrl(shortened)
+      
+      // Refresh the recent URLs list
+      await loadUserUrls()
       
       toast({
         title: "Success!",
@@ -69,10 +124,10 @@ export default function HomePage({ user }: HomePageProps) {
       
       setUrl('')
       setCustomAlias('')
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to shorten URL. Please try again.",
+        description: error.message || "Failed to shorten URL. Please try again.",
         variant: "destructive"
       })
     } finally {
@@ -91,6 +146,40 @@ export default function HomePage({ user }: HomePageProps) {
       toast({
         title: "Error",
         description: "Failed to copy URL",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const deleteUrl = async (urlId: string) => {
+    try {
+      await db.deleteUrl(urlId)
+      await loadUserUrls()
+      toast({
+        title: "Deleted",
+        description: "URL deleted successfully"
+      })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete URL",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const toggleUrlStatus = async (urlId: string, currentStatus: boolean) => {
+    try {
+      await db.updateUrl(urlId, { isActive: !currentStatus })
+      await loadUserUrls()
+      toast({
+        title: "Updated",
+        description: `URL ${!currentStatus ? 'activated' : 'deactivated'} successfully`
+      })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update URL status",
         variant: "destructive"
       })
     }
@@ -181,7 +270,7 @@ export default function HomePage({ user }: HomePageProps) {
           <CardContent className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-3">
               <Input
-                placeholder="Enter your long URL here..."
+                placeholder="Enter your long URL here... (https://example.com)"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 className="flex-1"
@@ -190,8 +279,9 @@ export default function HomePage({ user }: HomePageProps) {
               <Input
                 placeholder="Custom alias (optional)"
                 value={customAlias}
-                onChange={(e) => setCustomAlias(e.target.value)}
+                onChange={(e) => setCustomAlias(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
                 className="sm:w-48"
+                maxLength={20}
               />
               <Button 
                 onClick={handleShorten} 
@@ -217,8 +307,12 @@ export default function HomePage({ user }: HomePageProps) {
                     >
                       <Copy className="w-4 h-4" />
                     </Button>
-                    <Button size="sm" variant="outline">
-                      <QrCode className="w-4 h-4" />
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => window.open(shortenedUrl, '_blank')}
+                    >
+                      <ExternalLink className="w-4 h-4" />
                     </Button>
                   </div>
                 </div>
@@ -228,24 +322,49 @@ export default function HomePage({ user }: HomePageProps) {
         </Card>
 
         {/* Recent URLs */}
-        {recentUrls.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Recent Links</CardTitle>
-              <CardDescription>
-                Your recently shortened URLs
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+        <Card>
+          <CardHeader>
+            <CardTitle>Your Links</CardTitle>
+            <CardDescription>
+              Manage your recently shortened URLs
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {loadingUrls ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              </div>
+            ) : recentUrls.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Link2 className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                <p>No URLs shortened yet</p>
+                <p className="text-sm">Create your first short link above!</p>
+              </div>
+            ) : (
               <div className="space-y-3">
-                {recentUrls.map((urlItem: any) => (
-                  <div key={urlItem.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                {recentUrls.map((urlItem) => (
+                  <div key={urlItem.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {urlItem.shortened_url}
-                      </p>
+                      <div className="flex items-center space-x-2 mb-1">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {window.location.origin}/{urlItem.shortCode}
+                        </p>
+                        {!urlItem.isActive && (
+                          <Badge variant="secondary" className="text-red-600 bg-red-50">
+                            Inactive
+                          </Badge>
+                        )}
+                        {urlItem.customAlias && (
+                          <Badge variant="outline">
+                            Custom
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-sm text-gray-500 truncate">
-                        {urlItem.original_url}
+                        {urlItem.originalUrl}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Created {new Date(urlItem.createdAt).toLocaleDateString()}
                       </p>
                     </div>
                     <div className="flex items-center space-x-3 ml-4">
@@ -255,17 +374,40 @@ export default function HomePage({ user }: HomePageProps) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => copyToClipboard(urlItem.shortened_url)}
+                        onClick={() => copyToClipboard(`${window.location.origin}/${urlItem.shortCode}`)}
                       >
                         <Copy className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => window.open(`${window.location.origin}/${urlItem.shortCode}`, '_blank')}
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => toggleUrlStatus(urlItem.id, urlItem.isActive)}
+                        className={urlItem.isActive ? 'text-red-600 hover:text-red-700' : 'text-green-600 hover:text-green-700'}
+                      >
+                        {urlItem.isActive ? 'Deactivate' : 'Activate'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => deleteUrl(urlItem.id)}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
-        )}
+            )}
+          </CardContent>
+        </Card>
       </main>
     </div>
   )

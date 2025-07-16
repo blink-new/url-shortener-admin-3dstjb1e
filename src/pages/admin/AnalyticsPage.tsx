@@ -1,56 +1,181 @@
+import { useState, useEffect } from 'react'
+import { 
+  BarChart3, 
+  TrendingUp, 
+  MousePointer, 
+  Calendar,
+  Globe,
+  Clock,
+  Download
+} from 'lucide-react'
+import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
-import { Button } from '../../components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select'
-import { BarChart3, TrendingUp, MousePointer, Globe, Download } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select'
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell
+} from 'recharts'
+import { db, UrlRecord, ClickRecord } from '../../lib/database'
+
+interface AnalyticsData {
+  totalUrls: number
+  totalClicks: number
+  activeUrls: number
+  recentClicks: number
+  topUrls: UrlRecord[]
+  dailyClicks: Array<{ date: string; clicks: number }>
+  clicksByHour: Array<{ hour: number; clicks: number }>
+  topReferrers: Array<{ referrer: string; clicks: number }>
+}
 
 export default function AnalyticsPage() {
-  const chartData = [
-    { name: 'Mon', clicks: 120 },
-    { name: 'Tue', clicks: 190 },
-    { name: 'Wed', clicks: 300 },
-    { name: 'Thu', clicks: 250 },
-    { name: 'Fri', clicks: 420 },
-    { name: 'Sat', clicks: 380 },
-    { name: 'Sun', clicks: 290 },
-  ]
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d')
 
-  const topCountries = [
-    { country: 'United States', clicks: 1234, percentage: 45 },
-    { country: 'United Kingdom', clicks: 567, percentage: 20 },
-    { country: 'Canada', clicks: 345, percentage: 12 },
-    { country: 'Germany', clicks: 234, percentage: 8 },
-    { country: 'France', clicks: 123, percentage: 4 },
-  ]
+  useEffect(() => {
+    loadAnalytics()
+  }, [timeRange])
 
-  const topReferrers = [
-    { source: 'Direct', clicks: 890, percentage: 32 },
-    { source: 'Twitter', clicks: 567, percentage: 20 },
-    { source: 'Facebook', clicks: 445, percentage: 16 },
-    { source: 'LinkedIn', clicks: 334, percentage: 12 },
-    { source: 'Reddit', clicks: 223, percentage: 8 },
-  ]
+  const loadAnalytics = async () => {
+    try {
+      setLoading(true)
+      
+      // Get basic analytics
+      const basicAnalytics = await db.getAnalytics()
+      
+      // Get all clicks for detailed analysis
+      const allClicks = await db.getAllClicks()
+      
+      // Filter clicks by time range
+      const now = new Date()
+      const daysBack = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90
+      const cutoffDate = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000)
+      
+      const filteredClicks = allClicks.filter(click => 
+        new Date(click.clickedAt) >= cutoffDate
+      )
+
+      // Generate hourly click data
+      const clicksByHour = Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        clicks: filteredClicks.filter(click => 
+          new Date(click.clickedAt).getHours() === hour
+        ).length
+      }))
+
+      // Generate referrer data
+      const referrerCounts: { [key: string]: number } = {}
+      filteredClicks.forEach(click => {
+        const referrer = click.referrer || 'Direct'
+        referrerCounts[referrer] = (referrerCounts[referrer] || 0) + 1
+      })
+
+      const topReferrers = Object.entries(referrerCounts)
+        .map(([referrer, clicks]) => ({ referrer, clicks }))
+        .sort((a, b) => b.clicks - a.clicks)
+        .slice(0, 10)
+
+      setAnalytics({
+        ...basicAnalytics,
+        clicksByHour,
+        topReferrers
+      })
+    } catch (error) {
+      console.error('Failed to load analytics:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const exportAnalytics = () => {
+    if (!analytics) return
+
+    const data = {
+      summary: {
+        totalUrls: analytics.totalUrls,
+        totalClicks: analytics.totalClicks,
+        activeUrls: analytics.activeUrls,
+        recentClicks: analytics.recentClicks
+      },
+      dailyClicks: analytics.dailyClicks,
+      topUrls: analytics.topUrls.map(url => ({
+        shortCode: url.shortCode,
+        originalUrl: url.originalUrl,
+        clicks: url.clicks,
+        created: url.createdAt
+      })),
+      topReferrers: analytics.topReferrers
+    }
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `pti-analytics-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (!analytics) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-gray-500">Failed to load analytics data</p>
+        <Button onClick={loadAnalytics} className="mt-4">
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  const COLORS = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#f97316']
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-8">
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-          <p className="text-gray-600">Detailed insights into your link performance</p>
+          <p className="text-gray-600">Detailed insights into your URL performance</p>
         </div>
         <div className="flex space-x-3">
-          <Select defaultValue="7d">
-            <SelectTrigger className="w-32">
+          <Select value={timeRange} onValueChange={(value: any) => setTimeRange(value)}>
+            <SelectTrigger className="w-[180px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="24h">Last 24h</SelectItem>
               <SelectItem value="7d">Last 7 days</SelectItem>
               <SelectItem value="30d">Last 30 days</SelectItem>
               <SelectItem value="90d">Last 90 days</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline">
+          <Button variant="outline" onClick={exportAnalytics}>
             <Download className="w-4 h-4 mr-2" />
             Export
           </Button>
@@ -58,20 +183,31 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Links</p>
+                <p className="text-2xl font-bold text-gray-900">{analytics.totalUrls}</p>
+              </div>
+              <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center">
+                <BarChart3 className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Clicks</p>
-                <p className="text-2xl font-bold text-gray-900">45,678</p>
+                <p className="text-2xl font-bold text-gray-900">{analytics.totalClicks}</p>
               </div>
-              <MousePointer className="w-8 h-8 text-blue-600" />
-            </div>
-            <div className="mt-4">
-              <Badge variant="secondary" className="text-green-700 bg-green-50">
-                +12.5%
-              </Badge>
+              <div className="w-12 h-12 bg-green-50 rounded-lg flex items-center justify-center">
+                <MousePointer className="w-6 h-6 text-green-600" />
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -80,15 +216,12 @@ export default function AnalyticsPage() {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Unique Visitors</p>
-                <p className="text-2xl font-bold text-gray-900">23,456</p>
+                <p className="text-sm font-medium text-gray-600">Active Links</p>
+                <p className="text-2xl font-bold text-gray-900">{analytics.activeUrls}</p>
               </div>
-              <Globe className="w-8 h-8 text-green-600" />
-            </div>
-            <div className="mt-4">
-              <Badge variant="secondary" className="text-green-700 bg-green-50">
-                +8.2%
-              </Badge>
+              <div className="w-12 h-12 bg-purple-50 rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-6 h-6 text-purple-600" />
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -97,159 +230,212 @@ export default function AnalyticsPage() {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Click Rate</p>
-                <p className="text-2xl font-bold text-gray-900">3.4%</p>
+                <p className="text-sm font-medium text-gray-600">Avg. Clicks/Link</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {analytics.totalUrls > 0 ? Math.round(analytics.totalClicks / analytics.totalUrls) : 0}
+                </p>
               </div>
-              <TrendingUp className="w-8 h-8 text-purple-600" />
-            </div>
-            <div className="mt-4">
-              <Badge variant="secondary" className="text-red-700 bg-red-50">
-                -2.1%
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Avg. Daily</p>
-                <p className="text-2xl font-bold text-gray-900">6,525</p>
+              <div className="w-12 h-12 bg-orange-50 rounded-lg flex items-center justify-center">
+                <Calendar className="w-6 h-6 text-orange-600" />
               </div>
-              <BarChart3 className="w-8 h-8 text-orange-600" />
-            </div>
-            <div className="mt-4">
-              <Badge variant="secondary" className="text-green-700 bg-green-50">
-                +15.3%
-              </Badge>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts and Data */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        {/* Click Trends */}
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Daily Clicks Chart */}
         <Card>
           <CardHeader>
-            <CardTitle>Click Trends</CardTitle>
-            <CardDescription>Daily clicks over the past week</CardDescription>
+            <CardTitle>Daily Clicks</CardTitle>
+            <CardDescription>Click trends over time</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-64 flex items-end justify-between space-x-2">
-              {chartData.map((day, index) => (
-                <div key={day.name} className="flex flex-col items-center flex-1">
-                  <div 
-                    className="w-full bg-blue-600 rounded-t-sm transition-all hover:bg-blue-700"
-                    style={{ height: `${(day.clicks / 500) * 200}px` }}
-                  ></div>
-                  <span className="text-xs text-gray-600 mt-2">{day.name}</span>
-                  <span className="text-xs font-medium text-gray-900">{day.clicks}</span>
-                </div>
-              ))}
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={analytics.dailyClicks}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="date" 
+                    tickFormatter={(value) => new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  />
+                  <YAxis />
+                  <Tooltip 
+                    labelFormatter={(value) => new Date(value).toLocaleDateString()}
+                    formatter={(value) => [value, 'Clicks']}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="clicks" 
+                    stroke="#2563eb" 
+                    strokeWidth={2}
+                    dot={{ fill: '#2563eb', strokeWidth: 2, r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
 
-        {/* Top Countries */}
+        {/* Hourly Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle>Top Countries</CardTitle>
-            <CardDescription>Clicks by geographic location</CardDescription>
+            <CardTitle>Clicks by Hour</CardTitle>
+            <CardDescription>When your links are most active</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {topCountries.map((country, index) => (
-                <div key={country.country} className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
-                    <span className="text-sm font-medium text-gray-900">{country.country}</span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <div className="w-24 bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full"
-                        style={{ width: `${country.percentage}%` }}
-                      ></div>
-                    </div>
-                    <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {country.clicks}
-                    </span>
-                  </div>
-                </div>
-              ))}
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={analytics.clicksByHour}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="hour" 
+                    tickFormatter={(value) => `${value}:00`}
+                  />
+                  <YAxis />
+                  <Tooltip 
+                    labelFormatter={(value) => `${value}:00`}
+                    formatter={(value) => [value, 'Clicks']}
+                  />
+                  <Bar dataKey="clicks" fill="#10b981" />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Referrers and Devices */}
+      {/* Top Performing Links and Referrers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Top Referrers</CardTitle>
-            <CardDescription>Traffic sources</CardDescription>
+            <CardTitle>Top Performing Links</CardTitle>
+            <CardDescription>Your most clicked links</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {topReferrers.map((referrer, index) => (
-                <div key={referrer.source} className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
-                    <span className="text-sm font-medium text-gray-900">{referrer.source}</span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <div className="w-24 bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-green-600 h-2 rounded-full"
-                        style={{ width: `${referrer.percentage}%` }}
-                      ></div>
+            {analytics.topUrls.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <MousePointer className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                <p>No click data available</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {analytics.topUrls.slice(0, 10).map((url, index) => (
+                  <div key={url.id} className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-blue-600">
+                          {index + 1}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          /{url.shortCode}
+                        </p>
+                        <p className="text-sm text-gray-500 truncate">
+                          {url.originalUrl}
+                        </p>
+                      </div>
                     </div>
-                    <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {referrer.clicks}
-                    </span>
+                    <Badge variant="secondary">
+                      {url.clicks} clicks
+                    </Badge>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Device Types</CardTitle>
-            <CardDescription>Clicks by device category</CardDescription>
+            <CardTitle>Top Referrers</CardTitle>
+            <CardDescription>Where your traffic comes from</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[
-                { device: 'Desktop', clicks: 1456, percentage: 52 },
-                { device: 'Mobile', clicks: 1123, percentage: 40 },
-                { device: 'Tablet', clicks: 234, percentage: 8 },
-              ].map((device, index) => (
-                <div key={device.device} className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
-                    <span className="text-sm font-medium text-gray-900">{device.device}</span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <div className="w-24 bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-purple-600 h-2 rounded-full"
-                        style={{ width: `${device.percentage}%` }}
-                      ></div>
+            {analytics.topReferrers.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Globe className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                <p>No referrer data available</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {analytics.topReferrers.map((referrer, index) => (
+                  <div key={referrer.referrer} className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-green-600">
+                          {index + 1}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {referrer.referrer === 'Direct' ? 'Direct Traffic' : referrer.referrer}
+                        </p>
+                      </div>
                     </div>
-                    <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {device.clicks}
-                    </span>
+                    <Badge variant="outline">
+                      {referrer.clicks} clicks
+                    </Badge>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Performance Insights */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Performance Insights</CardTitle>
+          <CardDescription>Key metrics and recommendations</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Clock className="w-8 h-8 text-blue-600" />
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-2">Peak Hours</h3>
+              <p className="text-sm text-gray-600">
+                Most clicks occur between{' '}
+                {analytics.clicksByHour.reduce((max, curr) => 
+                  curr.clicks > max.clicks ? curr : max
+                ).hour}:00 - {analytics.clicksByHour.reduce((max, curr) => 
+                  curr.clicks > max.clicks ? curr : max
+                ).hour + 1}:00
+              </p>
+            </div>
+            
+            <div className="text-center">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <TrendingUp className="w-8 h-8 text-green-600" />
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-2">Growth Rate</h3>
+              <p className="text-sm text-gray-600">
+                {analytics.recentClicks > 0 ? '+' : ''}{analytics.recentClicks} clicks in the last {timeRange === '7d' ? '7 days' : timeRange === '30d' ? '30 days' : '90 days'}
+              </p>
+            </div>
+            
+            <div className="text-center">
+              <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Globe className="w-8 h-8 text-purple-600" />
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-2">Top Source</h3>
+              <p className="text-sm text-gray-600">
+                {analytics.topReferrers.length > 0 
+                  ? analytics.topReferrers[0].referrer === 'Direct' 
+                    ? 'Direct Traffic' 
+                    : analytics.topReferrers[0].referrer
+                  : 'No data'
+                }
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
